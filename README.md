@@ -67,7 +67,7 @@ The solution utilizes a single-node architecture optimized for the project's cur
    git clone https://github.com/WalidMoheyEldin/BoomRec.git
 2. **Launch the platform:**
     ```
-    docker-compose up -d --build
+    docker compose up -d --build
 3. **Access URLs:** 
     - Main Website: http://localhost:5440
     - Control Center (Admin): http://localhost:5441
