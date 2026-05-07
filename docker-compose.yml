@@ -1,0 +1,106 @@
+services:
+  sqlserver:
+    image: walidmoheyeldin/boomrec-sqlserver:latest
+    build:
+      context: .
+      dockerfile: SQLServerDockerfile
+    container_name: sqlserver
+    user: root
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "boomRecPw0rdforDb"
+    ports:
+      - "1433:1433"
+    volumes:
+      - sqlserver-data:/var/opt/mssql
+      - cvs:/var/opt/mssql/cvs
+    command: 
+      - /bin/bash
+      - -c
+      - |
+        mkdir -p /var/opt/mssql/cvs
+
+        /opt/mssql/bin/sqlservr &
+
+        (
+          until /opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P "$$MSSQL_SA_PASSWORD" -Q "SELECT 1" &> /dev/null; do
+            sleep 2
+          done
+
+          DB_EXISTS=$$(/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P "$$MSSQL_SA_PASSWORD" -h -1 -Q "SET NOCOUNT ON; SELECT DB_ID('BoomRec')" | xargs)
+          
+          if [ "$$DB_EXISTS" == "NULL" ] || [ -z "$$DB_EXISTS" ]; then
+            echo "Creating Database and Seeding Data..."
+            /opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P "$$MSSQL_SA_PASSWORD" -i /init/DummyDataSqlScript.sql
+
+            echo "Syncing Physical Files..."
+            
+            /opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P "$$MSSQL_SA_PASSWORD" -d BoomRec -m -1 -W -h -1 -Q "SET NOCOUNT ON; SELECT LOWER(CAST(Id AS VARCHAR(36))) FROM JobApplications" | while read -r id; do
+              clean_id=$$(echo "$$id" | tr -d '\r' | xargs)
+              if [ ! -z "$$clean_id" ]; then
+                cp /init/SamplesCV.pdf "/var/opt/mssql/cvs/$$clean_id.pdf"
+                echo "Created CV for JobApplications: $$clean_id"
+              fi
+            done
+          fi
+        ) & 
+
+        wait
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -Q \"IF DB_ID('BoomRec') IS NOT NULL SELECT 1 ELSE EXIT 1\" || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    restart: always
+  
+  controlcenter:
+    image: walidmoheyeldin/boomrec-controlcenter:latest
+    build:
+      context: .
+      dockerfile: BoomRec.ControlCenter/Dockerfile
+    container_name: controlcenter
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ConnectionStrings__BoomRecDbContextConnection: "Server=sqlserver,1433;Database=BoomRec;User Id=sa;Password=boomRecPw0rdforDb;MultipleActiveResultSets=true;Encrypt=True;TrustServerCertificate=True"
+      FileStorage__CVPath: /app/cvs
+      DataProtection__KeysPath: /usr/share/BoomRec/Keys
+      Website__BaseUrl: http://web:8080
+      Website__CacheSettings__AppId: 28A0D55F-ADDD-48D6-ACF1-12BE2DE62EB9
+      Website__CacheSettings__AppSecret: B3D72181-A00C-4060-A7A4-2D6153F178CB
+    ports:
+      - "5441:8080"
+    volumes:
+      - cvs:/app/cvs
+      - keys:/usr/share/BoomRec/Keys
+
+  web:
+    image: walidmoheyeldin/boomrec-web:latest
+    build:
+      context: .
+      dockerfile: BoomRec.Web/Dockerfile
+    container_name: web
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ConnectionStrings__BoomRecDbContextConnection: "Server=sqlserver,1433;Database=BoomRec;User Id=sa;Password=boomRecPw0rdforDb;MultipleActiveResultSets=true;Encrypt=True;TrustServerCertificate=True"
+      FileStorage__CVPath: /app/cvs
+      DataProtection__KeysPath: /usr/share/BoomRec/Keys
+      ControlCenterUrl: http://controlcenter:8080
+      CacheSettings__AppId: 28A0D55F-ADDD-48D6-ACF1-12BE2DE62EB9
+      CacheSettings__AppSecret: B3D72181-A00C-4060-A7A4-2D6153F178CB
+    ports:
+      - "5440:8080"
+    volumes:
+      - cvs:/app/cvs
+      - keys:/usr/share/BoomRec/Keys
+
+volumes:
+  sqlserver-data:
+  cvs:
+  keys:
